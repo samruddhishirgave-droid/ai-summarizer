@@ -1,69 +1,130 @@
-import Image from "next/image";
+"use client";
+import { useState, useRef } from "react";
+
+const MIN_CHARS = 50;
+const MAX_CHARS = 8000;
 
 export default function Home() {
+  const [text, setText] = useState("");
+  const [style, setStyle] = useState("bullets");
+  const [summary, setSummary] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  async function summarise() {
+    setError("");
+    setSummary("");
+    setCopied(false);
+    const t = text.trim();
+    if (!t) return setError("Please paste some text to summarise.");
+    if (t.length < MIN_CHARS)
+      return setError(`Text is too short. Enter at least ${MIN_CHARS} characters.`);
+    if (t.length > MAX_CHARS)
+      return setError(`Text is too long. The limit is ${MAX_CHARS} characters.`);
+
+    setLoading(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: t, style }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let msg = "Something went wrong. Please try again.";
+        try {
+          msg = (await res.json()).error || msg;
+        } catch {
+          // keep the default message
+        }
+        throw new Error(msg);
+      }
+      if (!res.body) throw new Error("Empty response from server.");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        setSummary((s) => s + decoder.decode(value, { stream: true }));
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") setError("Stopped.");
+      else if (e instanceof TypeError)
+        setError("Could not reach the server. Check your connection.");
+      else if (e instanceof Error) setError(e.message);
+      else setError("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(summary);
+      setCopied(true);
+    } catch {
+      // clipboard not available
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="wrap">
+      <h1>Text Summariser</h1>
+      <p className="sub">Paste an article, email or notes and get a clear summary.</p>
+
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Paste your text here..."
+        rows={10}
+        disabled={loading}
+      />
+      <div className="meta">
+        <span className={text.length > MAX_CHARS ? "bad" : ""}>
+          {text.length} / {MAX_CHARS}
+        </span>
+      </div>
+
+      <div className="row">
+        <select value={style} onChange={(e) => setStyle(e.target.value)} disabled={loading}>
+          <option value="bullets">Bullet points</option>
+          <option value="short">Short (2-3 sentences)</option>
+          <option value="detailed">Detailed (~150 words)</option>
+        </select>
+        <button onClick={summarise} disabled={loading}>
+          {loading ? "Summarising..." : "Summarise"}
+        </button>
+        {loading && (
+          <button className="ghost" onClick={() => abortRef.current?.abort()}>
+            Stop
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="error" role="alert">
+          {error}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+      )}
+      {loading && !summary && <div className="note">Reading your text...</div>}
+
+      {summary && (
+        <section className="result">
+          <div className="resulthead">
+            <strong>Summary</strong>
+            {!loading && (
+              <button className="ghost" onClick={copy}>
+                {copied ? "Copied" : "Copy"}
+              </button>
+            )}
+          </div>
+          <div className="out">{summary}</div>
+        </section>
+      )}
+    </main>
   );
 }
